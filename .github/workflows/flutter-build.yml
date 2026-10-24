@@ -138,10 +138,10 @@ jobs:
               target: windows-2022,
               platform: x64,
             }
-          # - {
-              # target: windows-11-arm,
-              # platform: ARM64,
-            # }
+          - {
+              target: windows-11-arm,
+              platform: ARM64,
+            }
     with:
       upload-artifact: ${{ inputs.upload-artifact }}
       target: ${{ matrix.job.target }}
@@ -167,16 +167,16 @@ jobs:
               vcpkg-triplet: x64-windows-static,
               build-args: "--vram",
             }
-          # - {
-              # target: aarch64-pc-windows-msvc,
-              # os: windows-11-arm,
-              # arch: aarch64,
-              # flutter-arch: arm64,
-              # vcpkg-triplet: arm64-windows-static,
-              # # vram is x86/x64-only (NVENC needs CUDA, Intel MediaSDK needs __rdtsc);
-              # # no NV/Intel/AMD hardware exists on Windows-on-ARM, so vram stays disabled here.
-              # build-args: "",
-            # }
+          - {
+              target: aarch64-pc-windows-msvc,
+              os: windows-11-arm,
+              arch: aarch64,
+              flutter-arch: arm64,
+              vcpkg-triplet: arm64-windows-static,
+              # vram is x86/x64-only (NVENC needs CUDA, Intel MediaSDK needs __rdtsc);
+              # no NV/Intel/AMD hardware exists on Windows-on-ARM, so vram stays disabled here.
+              build-args: "",
+            }
     steps:
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
@@ -544,7 +544,7 @@ jobs:
 
   # The fallback for the flutter version, we use Sciter for 32bit Windows.
   build-for-windows-sciter:
-    if: false # custom: platform not packaged
+    if: false # custom: sciter needs Rust 1.75 (i128 ABI) but locked deps need >= 1.85
     name: ${{ matrix.job.target }} (${{ matrix.job.os }})
     needs: [validate-update-metadata-keys]
     runs-on: ${{ matrix.job.os }}
@@ -726,7 +726,7 @@ jobs:
             ./SignOutput/rustdesk-*.exe
 
   build-rustdesk-ios:
-    if: false # custom: platform not packaged
+    if: ${{ inputs.upload-artifact }}
     name: build rustdesk ios ipa
     runs-on: ${{ matrix.job.os }}
     needs: [generate-bridge]
@@ -855,14 +855,14 @@ jobs:
       fail-fast: false
       matrix:
         job:
-          # - {
-              # target: x86_64-apple-darwin,
-              # os: macos-15-intel, #macos-latest or macos-14 use M1 now, https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#:~:text=14%20GB-,macos%2Dlatest%20or%20macos%2D14,-The%20macos%2Dlatestlabel
-              # extra-build-args: "",
-              # extra-cargo-features: "",
-              # arch: x86_64,
-              # vcpkg-triplet: x64-osx,
-            # }
+          - {
+              target: x86_64-apple-darwin,
+              os: macos-15-intel, #macos-latest or macos-14 use M1 now, https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#:~:text=14%20GB-,macos%2Dlatest%20or%20macos%2D14,-The%20macos%2Dlatestlabel
+              extra-build-args: "",
+              extra-cargo-features: "",
+              arch: x86_64,
+              vcpkg-triplet: x64-osx,
+            }
           - {
               target: aarch64-apple-darwin,
               os: macos-14,
@@ -1314,7 +1314,6 @@ jobs:
           files: rustdesk-${{ env.VERSION }}-unsigned.tar.gz
 
   build-rustdesk-android:
-    if: false # custom: platform not packaged
     needs: [generate-bridge]
     name: build rustdesk android apk ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
@@ -1610,7 +1609,7 @@ jobs:
   build-rustdesk-android-universal:
     needs: [build-rustdesk-android]
     name: build rustdesk android universal apk
-    if: false # custom: platform not packaged
+    if: false # custom: consumes signed per-arch APKs; enable after adding ANDROID_SIGNING_KEY secrets
     runs-on: ubuntu-24.04
     env:
       reltype: release
@@ -1809,14 +1808,14 @@ jobs:
               deb_arch: amd64,
               vcpkg-triplet: x64-linux,
             }
-          # - {
-              # arch: aarch64,
-              # target: aarch64-unknown-linux-gnu,
-              # distro: ubuntu18.04,
-              # on: ubuntu-22.04-arm,
-              # deb_arch: arm64,
-              # vcpkg-triplet: arm64-linux,
-            # }
+          - {
+              arch: aarch64,
+              target: aarch64-unknown-linux-gnu,
+              distro: ubuntu18.04,
+              on: ubuntu-22.04-arm,
+              deb_arch: arm64,
+              vcpkg-triplet: arm64-linux,
+            }
     steps:
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
@@ -2142,7 +2141,6 @@ jobs:
   # old for it. A separate job rather than a matrix entry of build-rustdesk-linux: appimage and
   # flatpak need that job, and a failure here must not skip them.
   build-rustdesk-linux-drm:
-    if: false # custom: platform not packaged
     needs: [generate-bridge]
     name: build rustdesk linux drm x86_64
     runs-on: ubuntu-22.04
@@ -2462,7 +2460,7 @@ jobs:
           path: ${{ env.DRM_DEB }}
 
   build-rustdesk-linux-sciter:
-    if: false # custom: platform not packaged
+    if: false # custom: sciter needs Rust 1.75 (i128 ABI) but locked deps need >= 1.85
     needs: [validate-update-metadata-keys]
     runs-on: ${{ matrix.job.on }}
     name: build-rustdesk-linux-sciter ${{ matrix.job.target }}
@@ -2708,7 +2706,7 @@ jobs:
     name: Build appimage ${{ matrix.job.target }}
     needs: [build-rustdesk-linux]
     runs-on: ubuntu-22.04
-    if: false # custom: platform not packaged
+    if: ${{ inputs.upload-artifact }}
     strategy:
       fail-fast: false
       matrix:
@@ -2763,7 +2761,7 @@ jobs:
       - build-rustdesk-linux
       - build-rustdesk-linux-sciter
     runs-on: ${{ matrix.job.on }}
-    if: false # custom: platform not packaged
+    if: ${{ inputs.upload-artifact }}
     strategy:
       fail-fast: false
       matrix:
