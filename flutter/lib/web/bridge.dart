@@ -1380,13 +1380,12 @@ class RustdeskImpl {
 
   String sessionGetAuditServerSync(
       {required UuidValue sessionId, required String typ, dynamic hint}) {
-    return js.context.callMethod('getByName', ['audit_server', typ]);
+    return '';
   }
 
   Future<void> sessionSendNote(
       {required UuidValue sessionId, required String note, dynamic hint}) {
-    return Future(
-        () => js.context.callMethod('setByName', ['send_note', note]));
+    return Future<void>.value();
   }
 
   Future<String> sessionAlternativeCodecs(

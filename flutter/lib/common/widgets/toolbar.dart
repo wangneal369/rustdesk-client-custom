@@ -609,7 +609,11 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
     );
   }
   // note
-  if (isDefaultConn && !bind.isDisableAccount()) {
+  if (isDefaultConn &&
+      !bind.isDisableAccount() &&
+      bind
+          .sessionGetAuditServerSync(sessionId: ffi.sessionId, typ: "conn")
+          .isNotEmpty) {
     v.add(
       TTextMenu(
           child: Text(translate('Note')),

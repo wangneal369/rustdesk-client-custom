@@ -648,7 +648,6 @@ pub fn check_zombie() {
 #[cfg(any(target_os = "android", target_os = "ios"))]
 #[tokio::main]
 pub async fn start_server(_is_server: bool) {
-    connection::Connection::start_audit_replay();
     crate::RendezvousMediator::start_all().await;
 }
 
@@ -663,7 +662,6 @@ pub async fn start_server(_is_server: bool) {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tokio::main]
 pub async fn start_server(is_server: bool, no_server: bool) {
-    connection::Connection::start_audit_replay();
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {

@@ -590,6 +590,9 @@ impl<T: InvokeUiSession> Session<T> {
 
     pub fn send_note(&self, note: String) {
         let url = self.get_audit_server("conn".to_string());
+        if url.is_empty() {
+            return;
+        }
         let id = self.get_id();
         let session_id = self.lc.read().unwrap().session_id;
         *self.last_audit_note.lock().unwrap() = note.clone();

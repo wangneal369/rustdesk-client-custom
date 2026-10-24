@@ -1323,12 +1323,9 @@ pub fn get_local_option(key: &str) -> String {
     v
 }
 
-pub fn get_audit_server(api: String, custom: String, typ: String) -> String {
-    let url = get_api_server(api, custom);
-    if url.is_empty() || is_public(&url) {
-        return "".to_owned();
-    }
-    format!("{}/api/audit/{}", url, typ)
+// This build intentionally has no centralized audit destination, including for configured APIs.
+pub fn get_audit_server(_api: String, _custom: String, _typ: String) -> String {
+    String::new()
 }
 
 /// Check if we should use raw TCP proxy for API calls.
@@ -3055,6 +3052,20 @@ mod tests {
         time::{interval, interval_at, sleep, Duration, Instant, Interval},
     };
     use std::collections::HashSet;
+
+    #[test]
+    fn centralized_audit_stays_disabled_with_configured_api_servers() {
+        for (api, rendezvous) in [
+            ("", ""),
+            ("https://management.example.test", ""),
+            ("", "rendezvous.example.test:21116"),
+            ("https://management.example.test", "rendezvous.example.test:21116"),
+        ] {
+            for kind in ["conn", "conn/active", "file", "alarm"] {
+                assert!(get_audit_server(api.into(), rendezvous.into(), kind.into()).is_empty());
+            }
+        }
+    }
 
     #[test]
     fn parses_stable_rustdesk_release_url() {

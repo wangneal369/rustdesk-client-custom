@@ -13,57 +13,94 @@ use hbb_common::{
 use reqwest::{blocking::Client as SyncClient, Client as AsyncClient};
 
 macro_rules! configure_http_client {
-    ($builder:expr, $tls_type:expr, $danger_accept_invalid_cert:expr, $Client:ty) => {{
-        (|| -> ResultType<$Client> {
-            let mut builder = $builder.no_proxy();
-            match $tls_type {
-                TlsType::Plain => {},
-                TlsType::NativeTls => {
-                    builder = builder.use_native_tls().danger_accept_invalid_certs($danger_accept_invalid_cert);
-                },
-                TlsType::Rustls => {
-                    #[cfg(any(target_os = "android", target_os = "ios"))]
-                    { builder = builder.use_preconfigured_tls(hbb_common::verifier::client_config($danger_accept_invalid_cert)?); }
-                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                    { builder = builder.use_rustls_tls().danger_accept_invalid_certs($danger_accept_invalid_cert); }
-                },
+    ($builder:expr, $tls_type:expr, $danger_accept_invalid_cert:expr, $Client: ty) => {{
+        // https://github.com/rustdesk/rustdesk/issues/11569
+        // https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.no_proxy
+        let mut builder = $builder.no_proxy();
+
+        match $tls_type {
+            TlsType::Plain => {}
+            TlsType::NativeTls => {
+                builder = builder.use_native_tls();
+                if $danger_accept_invalid_cert {
+                    builder = builder.danger_accept_invalid_certs(true);
+                }
             }
-            if let Some(conf) = Config::get_socks() {
-                let proxy = Proxy::from_conf(&conf, None)?;
-                let address = match &proxy.intercept {
-                    ProxyScheme::Http { host, .. } => format!("http://{}", host),
-                    ProxyScheme::Https { host, .. } => format!("https://{}", host),
-                    ProxyScheme::Socks5 { addr, .. } => format!("socks5://{}", addr),
-                };
-                let mut configured = reqwest::Proxy::all(address)?;
-                if let Some(auth) = proxy.intercept.maybe_auth() {
-                    if !auth.username().is_empty() && !auth.password().is_empty() {
-                        configured = configured.basic_auth(auth.username(), auth.password());
+            TlsType::Rustls => {
+                #[cfg(any(target_os = "android", target_os = "ios"))]
+                match hbb_common::verifier::client_config($danger_accept_invalid_cert) {
+                    Ok(client_config) => {
+                        builder = builder.use_preconfigured_tls(client_config);
+                    }
+                    Err(e) => {
+                        hbb_common::log::error!("Failed to get client config: {}", e);
                     }
                 }
-                builder = builder.proxy(configured);
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                {
+                    builder = builder.use_rustls_tls();
+                    if $danger_accept_invalid_cert {
+                        builder = builder.danger_accept_invalid_certs(true);
+                    }
+                }
             }
-            Ok(builder.build()?)
-        })()
-    }};
-}
+        }
 
-/// Audit delivery must not bypass a configured proxy, redirect, or disable certificate checks.
-pub fn create_audit_http_client(local_http: bool) -> ResultType<AsyncClient> {
-    let builder = AsyncClient::builder().no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .https_only(!local_http)
-        .timeout(std::time::Duration::from_secs(15));
-    if local_http { return Ok(builder.build()?); }
-    configure_http_client!(builder, TlsType::Rustls, false, AsyncClient)
+        let client = if let Some(conf) = Config::get_socks() {
+            let proxy_result = Proxy::from_conf(&conf, None);
+
+            match proxy_result {
+                Ok(proxy) => {
+                    let proxy_setup = match &proxy.intercept {
+                        ProxyScheme::Http { host, .. } => {
+                            reqwest::Proxy::all(format!("http://{}", host))
+                        }
+                        ProxyScheme::Https { host, .. } => {
+                            reqwest::Proxy::all(format!("https://{}", host))
+                        }
+                        ProxyScheme::Socks5 { addr, .. } => {
+                            reqwest::Proxy::all(&format!("socks5://{}", addr))
+                        }
+                    };
+
+                    match proxy_setup {
+                        Ok(mut p) => {
+                            if let Some(auth) = proxy.intercept.maybe_auth() {
+                                if !auth.username().is_empty() && !auth.password().is_empty() {
+                                    p = p.basic_auth(auth.username(), auth.password());
+                                }
+                            }
+                            builder = builder.proxy(p);
+                            builder.build().unwrap_or_else(|e| {
+                                info!("Failed to create a proxied client: {}", e);
+                                <$Client>::new()
+                            })
+                        }
+                        Err(e) => {
+                            info!("Failed to set up proxy: {}", e);
+                            <$Client>::new()
+                        }
+                    }
+                }
+                Err(e) => {
+                    info!("Failed to configure proxy: {}", e);
+                    <$Client>::new()
+                }
+            }
+        } else {
+            builder.build().unwrap_or_else(|e| {
+                info!("Failed to create a client: {}", e);
+                <$Client>::new()
+            })
+        };
+
+        client
+    }};
 }
 
 pub fn create_http_client(tls_type: TlsType, danger_accept_invalid_cert: bool) -> SyncClient {
     let builder = SyncClient::builder();
-    configure_http_client!(builder, tls_type, danger_accept_invalid_cert, SyncClient).unwrap_or_else(|e| {
-        info!("Failed to configure HTTP client: {}", e);
-        SyncClient::new()
-    })
+    configure_http_client!(builder, tls_type, danger_accept_invalid_cert, SyncClient)
 }
 
 pub fn create_http_client_async(
@@ -71,10 +108,7 @@ pub fn create_http_client_async(
     danger_accept_invalid_cert: bool,
 ) -> AsyncClient {
     let builder = AsyncClient::builder();
-    configure_http_client!(builder, tls_type, danger_accept_invalid_cert, AsyncClient).unwrap_or_else(|e| {
-        info!("Failed to configure HTTP client: {}", e);
-        AsyncClient::new()
-    })
+    configure_http_client!(builder, tls_type, danger_accept_invalid_cert, AsyncClient)
 }
 
 pub fn get_url_for_tls<'a>(url: &'a str, proxy_conf: &'a Option<Socks5Server>) -> &'a str {
