@@ -183,6 +183,8 @@ async fn login_deadline(authorized: bool, started: Instant) {
     time::sleep_until(started + LOGIN_GRACE).await
 }
 
+static AUDIT_WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
 lazy_static::lazy_static! {
     // Connections between accept and authorization, oldest first; see admit_unauthorized.
     static ref UNAUTHORIZED_CONNS: Mutex<Vec<(i32, IpAddr, Arc<UnauthorizedShared>)>> = Default::default();
@@ -1597,16 +1599,12 @@ impl Connection {
             return;
         }
         let url = self.server_audit_file.clone();
-        let file_num = files.len();
         let mut files = files;
         files.sort_by(|a, b| b.1.cmp(&a.1));
-        files.truncate(10);
         let is_file = files.len() == 1 && files[0].0.is_empty();
         let mut info = info;
         info["ip"] = json!(self.ip.clone());
         info["name"] = json!(self.lr.my_name.clone());
-        info["num"] = json!(file_num);
-        info["files"] = json!(files);
         let v = json!({
             "id":json!(Config::get_id()),
             "uuid":json!(crate::encode64(hbb_common::get_uuid())),
@@ -1615,12 +1613,15 @@ impl Connection {
             "type": r#type as i8,
             "path":path,
             "is_file":is_file,
-            "info":json!(info).to_string(),
-            "nonce": uuid::Uuid::new_v4().to_string(),
         });
-        tokio::spawn(async move {
-            allow_err!(Self::post_audit_async(url, v).await);
-        });
+        match base::audit_outbox::file_events(v, info, &files) {
+            Ok(events) => { tokio::spawn(async move {
+                for event in events {
+                    allow_err!(Self::post_audit_async(url.clone(), event).await);
+                }
+            }); }
+            Err(error) => log::error!("File audit could not be prepared: {}", error),
+        }
     }
 
     fn post_alarm_audit(&self, typ: AlarmAuditType, info: Value) {
@@ -1666,24 +1667,60 @@ impl Connection {
         );
     }
 
+    fn audit_outbox() -> base::audit_outbox::Outbox {
+        base::audit_outbox::Outbox::new(Config::file().with_extension("audit-outbox"))
+    }
+
+    pub(super) fn start_audit_replay() {
+        static WORKER: Mutex<Option<tokio::task::JoinHandle<()>>> = Mutex::new(None);
+        let mut worker = WORKER.lock().unwrap();
+        if worker.as_ref().is_some_and(|task| !task.is_finished()) { return; }
+        *worker = Some(tokio::spawn(async {
+            loop {
+                if let Err(error) = Self::flush_audit_outbox().await {
+                    log::error!("Audit outbox remains pending: {}", error);
+                }
+                tokio::select! {
+                    _ = AUDIT_WAKE.notified() => {},
+                    _ = tokio::time::sleep(Duration::from_secs(60)) => {},
+                }
+            }
+        }));
+    }
+
+    async fn flush_audit_outbox() -> ResultType<()> {
+        let outbox = Self::audit_outbox();
+        let destinations: Vec<_> = ["conn", "file", "alarm"].iter().map(|kind| {
+            crate::get_audit_server(Config::get_option("api-server"), Config::get_option("custom-rendezvous-server"), (*kind).into())
+        }).collect();
+        let failed = outbox.flush(&destinations, |record| async move {
+            Self::deliver_audit_async(record.url, record.value).await.map(|_| ())
+        }).await?;
+        if failed > 0 { log::warn!("{} audit record(s) retained for retry or operator review", failed); }
+        Ok(())
+    }
+
     async fn post_audit_async(url: String, v: Value) -> ResultType<String> {
-        // Audit records are compliance evidence; retry transport errors and
-        // 5xx (e.g. a reverse proxy answering while the api server restarts)
-        // so transient failures don't silently drop them. A 4xx is a
-        // deterministic rejection and fails immediately.
-        //
-        // The delays, not the attempt count, are what cover the case this exists
-        // for: a proxy answering 502 during a restart fails fast, so without them
-        // every attempt lands within a few seconds and none outlives the restart.
-        //
-        // The window is bounded on the other side: the api server only remembers a
-        // record's nonce for five minutes, so a retry arriving after that expired
-        // would be stored a second time. Counting attempts cannot bound it - one
-        // attempt is already up to 84s (post_request_ retries the TLS handshake up
-        // to four times at 12s each, then the TCP-proxy fallback adds 36s), and a
-        // suspend between attempts stretches the wall clock without limit. So stop
-        // by elapsed time instead, early enough that the last attempt still lands
-        // inside the server's window.
+        Self::audit_outbox().enqueue(url, v).await?;
+        Self::start_audit_replay();
+        AUDIT_WAKE.notify_one();
+        Ok(String::new())
+    }
+
+    async fn post_audit_http(url: &str, body: String) -> ResultType<(u16, String)> {
+        let local = base::audit_outbox::is_loopback_http(url)?;
+        let client = crate::hbbs_http::create_audit_http_client(local)?;
+        let mut request = client.post(url).header("Content-Type", "application/json")
+            .body(body).timeout(Duration::from_secs(15));
+        let token = Config::get_option(keys::OPTION_AUDIT_TOKEN);
+        if !token.is_empty() { request = request.bearer_auth(token); }
+        let response = request.send().await?;
+        let status = response.status().as_u16();
+        Ok((status, response.text().await?))
+    }
+
+    async fn deliver_audit_async(url: String, v: Value) -> ResultType<String> {
+        // Bound one delivery round; the durable outbox retains failures and reuses the nonce.
         const RETRY_DEADLINE: Duration = Duration::from_secs(120);
         // One delay per retry, so the attempt count follows from the table and the
         // two cannot drift apart.
@@ -1695,7 +1732,7 @@ impl Connection {
         loop {
             attempt += 1;
             let (retryable, err) =
-                match crate::post_request_with_status(url.clone(), body.clone(), "").await {
+                match Self::post_audit_http(&url, body.clone()).await {
                     Ok((status, text)) => {
                         if (200..300).contains(&status) {
                             // Success is an empty body. hbbs reports handler
@@ -1735,7 +1772,7 @@ impl Connection {
             let elapsed = started.elapsed();
             if !retryable || attempt >= ATTEMPTS || elapsed >= RETRY_DEADLINE {
                 log::error!(
-                    "Audit post dropped (attempt {}/{}, {:?} elapsed): {}",
+                    "Audit delivery deferred (attempt {}/{}, {:?} elapsed): {}",
                     attempt,
                     ATTEMPTS,
                     elapsed,
@@ -1755,7 +1792,7 @@ impl Connection {
             // the check above alone would let one begin up to a backoff later.
             if started.elapsed() >= RETRY_DEADLINE {
                 log::error!(
-                    "Audit post dropped (attempt {}/{}, deadline passed during backoff): {}",
+                    "Audit delivery deferred (attempt {}/{}, deadline passed during backoff): {}",
                     attempt,
                     ATTEMPTS,
                     err

@@ -29,6 +29,10 @@ backtrace = "0.3"
 log = "0.4"
 lazy_static = "1.5"
 anyhow = "1.0"
+url = "2.3"
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "socks", "native-tls", "rustls-tls"] }
 
 [build-dependencies]
 protobuf-codegen = { version = "3.7" }

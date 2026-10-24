@@ -1,3 +1,4 @@
+pub mod audit_outbox;
 pub mod config;
 pub mod fs;
 pub mod keyboard;
