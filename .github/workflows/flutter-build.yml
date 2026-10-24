@@ -726,7 +726,7 @@ jobs:
             ./SignOutput/rustdesk-*.exe
 
   build-rustdesk-ios:
-    if: false # custom: upstream never publishes the ipa (needs Apple signing); vcpkg libs also fail to link for iOS 10
+    if: ${{ inputs.upload-artifact }}
     name: build rustdesk ios ipa
     runs-on: ${{ matrix.job.os }}
     needs: [generate-bridge]
@@ -812,6 +812,9 @@ jobs:
           path: ./
 
       - name: Build rustdesk lib
+        env:
+          # custom: the app targets iOS 13; linking for the default iOS 10 misses ___chkstk_darwin from vcpkg libs
+          IPHONEOS_DEPLOYMENT_TARGET: "13.0"
         run: |
           rustup target add ${{ matrix.job.target }}
           cargo build --locked --features flutter,hwcodec --release --target aarch64-apple-ios --lib
@@ -830,21 +833,23 @@ jobs:
           # for easy debugging
           flutter build ipa --release --no-codesign
 
-      # - name: Upload Artifacts
-      #   # if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
-      #   uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-      #   with:
-      #     name: rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
-      #     path: flutter/build/ios/ipa/*.ipa
+      - name: Package unsigned ipa
+        if: env.UPLOAD_ARTIFACT == 'true'
+        shell: bash
+        run: |
+          # custom: --no-codesign only produces an .xcarchive; wrap the app as an unsigned ipa for sideloading.
+          mkdir -p Payload
+          cp -R flutter/build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app Payload/
+          zip -qry rustdesk-${{ env.VERSION }}-aarch64-unsigned.ipa Payload
 
-      # - name: Publish ipa package
-      #   # if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
-      #   uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
-      #   with:
-      #     prerelease: true
-      #     tag_name: ${{ env.TAG_NAME }}
-      #     files: |
-      #       flutter/build/ios/ipa/*.ipa
+      - name: Publish ipa package
+        if: env.UPLOAD_ARTIFACT == 'true'
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        with:
+          prerelease: true
+          tag_name: ${{ env.TAG_NAME }}
+          files: |
+            rustdesk-${{ env.VERSION }}-aarch64-unsigned.ipa
 
 
   build-for-macOS:
@@ -1314,7 +1319,6 @@ jobs:
           files: rustdesk-${{ env.VERSION }}-unsigned.tar.gz
 
   build-rustdesk-android:
-    if: false # custom: only common desktop platforms (Windows x64, macOS, Linux x64)
     needs: [generate-bridge]
     name: build rustdesk android apk ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
@@ -1329,20 +1333,20 @@ jobs:
               reltype: release,
               suffix: "",
             }
-          - {
-              arch: armv7,
-              target: armv7-linux-androideabi,
-              os: ubuntu-24.04,
-              reltype: release,
-              suffix: "",
-            }
-          - {
-              arch: x86_64,
-              target: x86_64-linux-android,
-              os: ubuntu-24.04,
-              reltype: release,
-              suffix: "",
-            }
+          # - {
+              # arch: armv7,
+              # target: armv7-linux-androideabi,
+              # os: ubuntu-24.04,
+              # reltype: release,
+              # suffix: "",
+            # }
+          # - {
+              # arch: x86_64,
+              # target: x86_64-linux-android,
+              # os: ubuntu-24.04,
+              # reltype: release,
+              # suffix: "",
+            # }
     steps:
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
