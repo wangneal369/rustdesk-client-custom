@@ -278,15 +278,9 @@ async fn start_hbbs_sync_async() {
     }
 }
 
+// No management backend in this build: never upload sysinfo/conns or accept pushed strategy/disconnects.
 fn heartbeat_url() -> String {
-    let url = crate::common::get_api_server(
-        Config::get_option("api-server"),
-        Config::get_option("custom-rendezvous-server"),
-    );
-    if url.is_empty() || crate::is_public(&url) {
-        return "".to_owned();
-    }
-    format!("{}/api/heartbeat", url)
+    String::new()
 }
 
 fn handle_config_options(config_options: HashMap<String, String>) {
