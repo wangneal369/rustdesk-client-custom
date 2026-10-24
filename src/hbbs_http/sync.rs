@@ -278,9 +278,14 @@ async fn start_hbbs_sync_async() {
     }
 }
 
-// No management backend in this build: never upload sysinfo/conns or accept pushed strategy/disconnects.
+// custom: heartbeat only to an explicitly configured API server, never to one derived from the ID server.
 fn heartbeat_url() -> String {
-    String::new()
+    let api = Config::get_option("api-server");
+    let api = api.trim().trim_end_matches('/');
+    if api.is_empty() || crate::is_public(api) {
+        return "".to_owned();
+    }
+    format!("{}/api/heartbeat", api)
 }
 
 fn handle_config_options(config_options: HashMap<String, String>) {
