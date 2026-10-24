@@ -1,9 +1,7 @@
 name: Flutter Nightly Build
 
+# custom: automatic triggers removed to save private-repo Actions minutes
 on:
-  schedule:
-    # schedule build every night
-    - cron: "0 0 * * *"
   workflow_dispatch:
 
 jobs:

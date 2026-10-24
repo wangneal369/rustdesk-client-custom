@@ -9,11 +9,16 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+-[0-9]+'
       - '[0-9]+.[0-9]+.[0-9]+-[0-9]+'
 
+# custom: build jobs upload to GitHub Releases; new repos default GITHUB_TOKEN to read-only.
+permissions:
+  contents: write
+
 jobs:
   run-flutter-tag-build:
     uses: ./.github/workflows/flutter-build.yml
     secrets: inherit
     with:
       upload-artifact: true
-      upload-tag: ${{ github.ref_name }}
+      # custom: a manual run from a branch must not create a tag named after the branch.
+      upload-tag: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'nightly' }}
       publish-update-metadata: ${{ github.repository == 'rustdesk/rustdesk' }}
